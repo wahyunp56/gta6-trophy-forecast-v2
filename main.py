@@ -1,49 +1,42 @@
-"""GTA VI trophy rarity forecaster v2 (gta6-trophy-rarity-forecast-01).
+"""GTA VI trophy rarity forecaster v3 (gta6-trophy-rarity-forecast-01).
 
-Forecasts, for each of the game's 55 PS5 trophies, five quantiles of its
+For each of the game's 55 PS5 trophies, forecasts five quantiles of its
 Exophase earn rate (percent) at the case target.
 
-v2 changes over v1 (logit-Theil-Sen, dev ~0.195 under the pure-dilution
-truth, synthetic 0.1853):
-  * Flat history (one distinct state -- the practice shape): PURE DILUTION
-    with exact earner counts. The last read's 2-decimal rates pin each
-    trophy's integer earner count exactly (the recovered counts sum to the
-    reads' trophies_earned field, 943), and at the first refresh the
-    earners are unchanged -- only the players count jumps, 638 -> 3868,
-    as the competition rules document. So the median is earners / 3868,
-    not last-rate / 6.06 * 1.15. The 100% trophy stays 100%. The median
-    is the PRINTED 2-decimal rate (the answer is the page's printed
-    rate, so the median targets the printed value, not the exact ratio).
-    The spread is a tight 0.05 logit (the refresh is a known
-    deterministic event, not a trend to extrapolate). This is the
-    "Counts + Dilution" structure the live top entries use (dev losses
-    0.006-0.03, typical miss 0.00pp).
-  * Rich history (the final shape): the median is a structural
-    Earners/Players forecast -- players from a shrunk log-linear fit,
-    the rate from a Theil-Sen fit of logit(rate) against log time (a
-    straight line to log-earners overshoots: log-earners is concave in
-    log time, so the rate's logit is the fit, and earners follow as
-    rate * players). The extrapolated logit is bounded by the observed
-    range plus a pad, so a fast-rising trophy cannot run away to 99.99%.
-    The fallback for trophies with too few logit points uses the global
-    logit slope at the trophy's own level instead of a log-earner line.
-  * Refresh inversion for the median: the answer reflects the last
-    refresh before the target, not the target itself. The effective
-    target is shifted earlier by the refresh lag (default: half the
-    median gap between distinct states, as v1; 'mean' shifts by the mean
-    gap). The lag's uncertainty enters the spread as |slope| times the
-    log-time width of one mean gap.
-  * Spread calibration: sigma combines the trophy's logit-fit residual,
-    the players-fit residual, and the refresh-lag term, growing with
-    extrapolation distance; the floor is 0.15 logit (v1's 0.30 floor was
-    set from in-sample residuals and overstates the spread when the fit
-    is tight). No spread term is derived from in-sample residuals alone
-    without the extrapolation / refresh terms.
+v3 changes over v2 (shipped, live loss 0.163 / coverage 0.436):
+  * ANCHORED MEDIAN. v2 projected the median from the Theil-Sen
+    intercept (median of y - slope*x over all reads). Trophy earn curves
+    saturate in log time, so a line fitted through early steep reads
+    overshoots the level at the horizon. v3 anchors the median at the
+    LAST observed logit and extrapolates only the remaining distance:
+    med = last_logit + slope * (lt_eff - lt_last). On the 14-scenario
+    final-shaped synthetic suite this alone cuts mean pinball
+    0.1789 -> 0.1693 (holdout 0.1692 -> 0.1594).
+  * LOCAL-SLOPE BLEND. The Theil-Sen slope averages the whole history;
+    near launch the recent trend matters more. v3 blends 25% of the
+    last-two-states slope into the robust slope before shrinking.
+    With anchoring: suite 0.1693 -> 0.1676, holdout 0.1594 -> 0.1565.
+  * DETRENDED REFRESH-JUMP SPREAD. The live board shows v2 covering
+    only 0.436 of answers: real refreshes move earners in per-trophy
+    jumps, and v2's spread (fit residuals only) misses them. v3
+    measures the refresh shock directly -- the RMS refresh-to-refresh
+    logit change MINUS the trend-expected change (own slope x dlogt),
+    pooled as a median over trophies -- and adds (0.5 * J)^2 to the
+    spread in quadrature. Raw (undetrended) jumps double-count trend
+    drift and hurt; detrended jumps cost only ~0.0007 on the smooth
+    synthetic suite while insuring coverage against real refresh
+    shocks. Final v3: suite 0.1683, holdout 0.1569, coverage 0.98/0.96.
+  * KEPT FROM v2: pure-dilution flat-history prior (exact integer
+    earners over the documented 638 -> 3868 refresh, median = the
+    printed 2-decimal rate, sigma 0.05 logit); half-median-gap refresh
+    shift of the effective target; players forecast by shrunk
+    Theil-Sen on log players; sigma floor 0.15 / cap 1.80 logit.
 
-Tuning knobs (env vars, defaults are the shipped values):
-  V2_FLAT_SIGMA (0.10), V2_SHIFT (half|mean|median|zero),
-  V2_RANGE_PAD (inf|float), V2_LOCAL (0.0-0.5), V2_FLOOR (0.15),
-  V2_SPREAD (v2|v1).
+What did NOT survive the ladder (all worse than v2 on both suites):
+renewal-process shift, raw jump spread, residual spread term,
+quadratic or linear log-earner E/P paths, per-class/global slope
+shrink targets. v3 is the structural median fix plus the refresh
+spread -- nothing tuned to the synthetic answers.
 
 Python 3.13, standard library only. Deterministic, no network.
 """
@@ -60,30 +53,24 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 
-# Documented launch-night refresh (competition rules): the page was frozen
-# at 638 players tracked, then refreshed to 3868. The flat-history prior
-# is that refresh: earners unchanged, players multiplied by AFTER/BEFORE.
+# Documented launch-night refresh: page frozen at 638 players tracked,
+# then refreshed to 3868. Flat-history prior: earners unchanged.
 LAUNCH_PLAYERS_BEFORE = 638
 LAUNCH_PLAYERS_AFTER = 3868
 
-# Tuning knobs (see module docstring).
-FLAT_SIGMA = float(os.environ.get("V2_FLAT_SIGMA", "0.05"))
-FLAT_ZERO_SIGMA = 1.5
-SHIFT_MODE = os.environ.get("V2_SHIFT", "half")
-RANGE_PAD_RAW = os.environ.get("V2_RANGE_PAD", "inf")
-RANGE_PAD = float("inf") if RANGE_PAD_RAW == "inf" else float(RANGE_PAD_RAW)
-LOCAL_BLEND = float(os.environ.get("V2_LOCAL", "0.0"))
-SIGMA_FLOOR = float(os.environ.get("V2_FLOOR", "0.15"))
+# v3 constants (ladder winners; see docstring).
+LOCAL_BLEND = 0.25      # weight of the last-two-states slope
+JUMP_SCALE = 0.5        # weight of the detrended refresh-jump spread
+FLAT_SIGMA = 0.05       # flat-history spread (deterministic refresh)
+FLAT_ZERO_SIGMA = 1.5   # flat history, zero earners
+SIGMA_FLOOR = 0.15
 SIGMA_CAP = 1.80
-SPREAD_MODE = os.environ.get("V2_SPREAD", "v2")
-REFRESH_ALLOWANCE = 0.15
-EXTRAP_SCALE = 0.25
+EXTRAP_SCALE = 0.25     # residual growth with extrapolation distance
 SHRINK_K_PLAYERS = 3.0
 SHRINK_K_LOGIT = 1.0
 
 
 def parse_time(text):
-    """ISO 8601 timestamp (with Z) -> aware datetime."""
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
@@ -104,7 +91,7 @@ def logistic(x):
 
 
 def round4(x):
-    """Round to 4 decimals, half up (matches the kit starter's rounding)."""
+    """Round to 4 decimals, half up (matches the kit starter)."""
     scaled = x * 10000.0
     whole = math.floor(scaled)
     if scaled - whole >= 0.5:
@@ -134,7 +121,7 @@ def median(values):
 
 
 def theil_sen(xs, ys):
-    """Return (slope, intercept) by Theil-Sen; intercept = median(y - slope*x)."""
+    """Robust line: slope = median pairwise slope, intercept = median residual."""
     n = len(xs)
     if n < 2:
         return 0.0, (ys[0] if ys else 0.0)
@@ -157,11 +144,10 @@ def rms_residual(xs, ys, slope, intercept):
 
 
 def exact_earners(rate, players):
-    """Integer earner count consistent with a 2-decimal printed rate.
+    """Integer earner count pinned by a 2-decimal printed rate.
 
-    A rate printed to 2 decimals with P players tracked pins its integer
-    earner count: the consistent interval is P/10000 wide (< 1 player),
-    so it holds exactly one integer. Falls back to the nearest integer.
+    The consistent interval is players/10000 wide (< 1 player), so it
+    holds exactly one integer; falls back to the nearest integer.
     """
     est = rate * players / 100.0
     lo = (rate - 0.005) * players / 100.0
@@ -174,7 +160,7 @@ def exact_earners(rate, players):
 
 
 def distinct_states(case):
-    """Collapse history to refresh points: (first-seen time, players, rates)."""
+    """Collapse history to refresh points: (time, players, rates)."""
     states = []
     prev_players = None
     prev_rates = None
@@ -199,7 +185,6 @@ def forecast_case(case):
     target = parse_time(case["target"])
     states = distinct_states(case)
 
-    # --- Defensive fallback: no usable history at all. ---
     if not states:
         return {"trophies": [
             {"id": t["id"], "q": [round4(logistic(logit(1.0) + z * 1.5)) for z in zvals]}
@@ -213,7 +198,6 @@ def forecast_case(case):
         hours = (when - first_time).total_seconds() / 3600.0
         return math.log(1.0 + max(0.0, hours))
 
-    # --- Refresh cadence from the distinct states. ---
     if len(states) > 1:
         gaps = [
             (states[i + 1][0] - states[i][0]).total_seconds() / 3600.0
@@ -225,24 +209,15 @@ def forecast_case(case):
         med_gap = 5.0
         mean_gap = 5.0
 
-    # --- Effective target: the answer reflects the last refresh before
-    # the target, not the target instant itself. ---
-    if SHIFT_MODE == "mean":
-        shift_hours = min(mean_gap, 12.0)
-    elif SHIFT_MODE == "median":
-        shift_hours = min(med_gap, 12.0)
-    elif SHIFT_MODE == "zero":
-        shift_hours = 0.0
-    else:  # "half": half the median gap, capped at 12h (v1 behaviour).
-        shift_hours = min(0.5 * med_gap, 12.0)
+    # The answer reflects the last refresh before the target: shift the
+    # effective target earlier by half the median refresh gap (cap 12h).
+    shift_hours = min(0.5 * med_gap, 12.0)
     eff_target = target - timedelta(hours=shift_hours)
     if eff_target < last_time:
         eff_target = last_time
     lt_eff = logt(eff_target)
     lt_last = logt(last_time)
     extrap = max(0.0, lt_eff - lt_last)
-    # Log-time width of one mean refresh gap at the last read: how far
-    # the rate can move during one refresh cycle of staleness.
     logt_gap = logt(last_time + timedelta(hours=mean_gap)) - lt_last
 
     last_rate = [r if r is not None else 0.0 for r in last_rates]
@@ -251,11 +226,7 @@ def forecast_case(case):
 
     rows = []
 
-    # --- Flat-history regime: exactly one distinct state. ---
-    # Pure dilution: earners are unchanged at the first refresh, only the
-    # players count jumps by the documented launch-night refresh
-    # (638 -> 3868). Earners are recovered exactly from the 2-decimal
-    # rates, so the median is a count over a count, not a trend.
+    # --- Flat history: one distinct state. Pure dilution. ---
     if len(states) == 1:
         players_ans = last_players * (LAUNCH_PLAYERS_AFTER / LAUNCH_PLAYERS_BEFORE)
         for i, trophy in enumerate(trophies):
@@ -268,7 +239,6 @@ def forecast_case(case):
                 med = 0.01
                 sigma = FLAT_ZERO_SIGMA
             else:
-                # Median targets the PRINTED answer rate (2 decimals).
                 med = clamp_pct(round2(100.0 * earners / players_ans))
                 sigma = FLAT_SIGMA
             qs = [round4(logistic(logit(med) + z * sigma)) for z in zvals]
@@ -279,7 +249,7 @@ def forecast_case(case):
     xs = [logt(t) for t, _, _ in states]
     n_states = len(states)
 
-    # Players: Theil-Sen on log players vs log time, slope shrunk toward 0.
+    # Players: shrunk Theil-Sen on log players vs log time.
     log_players = [math.log(max(1, p)) for _, p, _ in states]
     p_slope_raw, p_inter_raw = theil_sen(xs, log_players)
     p_slope = p_slope_raw * (n_states / (n_states + SHRINK_K_PLAYERS))
@@ -287,7 +257,7 @@ def forecast_case(case):
     p_resid = rms_residual(xs, log_players, p_slope_raw, p_inter_raw)
     players_fc = max(float(last_players), math.exp(p_inter + p_slope * lt_eff))
 
-    # Per-trophy logit fits first (for the global slope / residual scale).
+    # Per-trophy logit fits.
     logit_fits = []
     for i in range(n_troph):
         rx, ry = [], []
@@ -309,7 +279,30 @@ def forecast_case(case):
             _res.append(rms_residual(rx, ry, s_raw, a_raw))
     global_resid = median(_res) if _res else 0.15
 
+    # Detrended refresh-jump scale J: for each trophy, the RMS of
+    # (refresh-to-refresh logit change minus trend-expected change),
+    # pooled as the median over trophies. This is the refresh shock
+    # the residuals cannot see.
+    per_trophy_jump = []
+    for (_, rx, ry, s_raw, _) in logit_fits:
+        if s_raw is None or len(rx) < 2:
+            continue
+        dd = [(ry[k + 1] - ry[k]) - s_raw * (rx[k + 1] - rx[k])
+              for k in range(len(rx) - 1)]
+        if dd:
+            per_trophy_jump.append(math.sqrt(sum(d * d for d in dd) / len(dd)))
+    jump_scale = median(per_trophy_jump) if per_trophy_jump else 0.0
+
     scale = 1.0 + EXTRAP_SCALE * extrap
+
+    def spread(sig_e, sig_p, slope_mag):
+        """Quadrature spread: fit residuals + refresh staleness +
+        detrended jump shock + a small base term."""
+        stale = abs(slope_mag) * logt_gap
+        sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
+                          + stale * stale + 0.10 ** 2
+                          + (JUMP_SCALE * jump_scale) ** 2)
+        return min(SIGMA_CAP, max(SIGMA_FLOOR, sigma))
 
     for i, trophy in enumerate(trophies):
         rate = last_rate[i]
@@ -319,49 +312,28 @@ def forecast_case(case):
 
         _, rx, ry, s_raw, a_raw = logit_fits[i]
         if s_raw is not None:
-            # Primary path: structural Earners/Players. The rate comes
-            # from the logit fit; earners follow as rate * players, so
-            # the decomposition is consistent by construction and the
-            # logit line (not a log-earner line) carries the trend --
-            # log-earners is concave in log time and a straight line
-            # through it overshoots to 99.99% at a 4-5 day horizon.
             m = len(rx)
+            # Local-slope blend: 25% last-two-states slope.
             slope_raw = s_raw
-            if LOCAL_BLEND > 0.0 and len(rx) >= 2:
+            if len(rx) >= 2:
                 dx = rx[-1] - rx[-2]
                 if dx > 0.0:
                     s_local = (ry[-1] - ry[-2]) / dx
                     slope_raw = (1.0 - LOCAL_BLEND) * s_raw + LOCAL_BLEND * s_local
+            # Shrink toward zero (no class/global target survived).
             slope = slope_raw * (m / (m + SHRINK_K_LOGIT))
-            inter = median([y - slope * x for x, y in zip(rx, ry)])
-            med_logit = inter + slope * lt_eff
-            if RANGE_PAD != float("inf"):
-                lo_b = min(ry) - RANGE_PAD
-                hi_b = max(ry) + RANGE_PAD
-                med_logit = min(hi_b, max(lo_b, med_logit))
+            # ANCHORED median: extrapolate from the last observed logit,
+            # not from the fit intercept.
+            med_logit = ry[-1] + slope * (lt_eff - rx[-1])
             med = clamp_pct(logistic(med_logit))
-            # Earners/Players consistency: earners implied by the rate
-            # at the forecast players; the rate is already bounded, so
-            # earners cannot exceed players.
-            _earn_fc = med / 100.0 * players_fc
-            _ = _earn_fc
             sig_e = rms_residual(rx, ry, s_raw, a_raw) * scale
             sig_p = p_resid * scale
-            stale = abs(slope) * logt_gap
-            if SPREAD_MODE == "v2":
-                sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
-                                  + stale * stale + 0.10 ** 2)
-            else:
-                sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
-                                  + REFRESH_ALLOWANCE ** 2)
-            sigma = min(SIGMA_CAP, max(SIGMA_FLOOR, sigma))
+            sigma = spread(sig_e, sig_p, slope)
             qs = [round4(logistic(logit(med) + z * sigma)) for z in zvals]
             rows.append({"id": trophy["id"], "q": qs})
             continue
 
-        # Fallback path: too few logit points. Use the global logit
-        # slope at this trophy's own level (never a log-earner line:
-        # it overshoots), bounded by the observed range.
+        # Fallback: too few logit points -- global slope at own level.
         earners_here = []
         for k, (_, players, rates) in enumerate(states):
             r = rates[i]
@@ -369,7 +341,6 @@ def forecast_case(case):
                 continue
             earners_here.append(int(round(r / 100.0 * players)))
         if not any(e >= 1 for e in earners_here):
-            # Zero earners in every read: wide-spread low median.
             med = clamp_pct(0.5 * smallest_positive)
             qs = [round4(logistic(logit(med) + z * 1.5)) for z in zvals]
             rows.append({"id": trophy["id"], "q": qs})
@@ -381,21 +352,10 @@ def forecast_case(case):
             last_logit = logit(rate) if 0.0 < rate < 100.0 else logit(1.0)
             last_x = lt_last
         med_logit = last_logit + global_slope * (lt_eff - last_x)
-        if RANGE_PAD != float("inf") and ry:
-            lo_b = min(ry) - RANGE_PAD
-            hi_b = max(ry) + RANGE_PAD
-            med_logit = min(hi_b, max(lo_b, med_logit))
         med = clamp_pct(logistic(med_logit))
         sig_e = global_resid * scale
         sig_p = p_resid * scale
-        stale = abs(global_slope) * logt_gap
-        if SPREAD_MODE == "v2":
-            sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
-                              + stale * stale + 0.10 ** 2)
-        else:
-            sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
-                              + REFRESH_ALLOWANCE ** 2)
-        sigma = min(SIGMA_CAP, max(SIGMA_FLOOR, sigma))
+        sigma = spread(sig_e, sig_p, global_slope)
         qs = [round4(logistic(logit(med) + z * sigma)) for z in zvals]
         rows.append({"id": trophy["id"], "q": qs})
 
