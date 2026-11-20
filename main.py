@@ -1,60 +1,67 @@
-"""GTA VI trophy rarity forecaster v4 (gta6-trophy-rarity-forecast-01).
+"""GTA VI trophy rarity forecaster v5 (gta6-trophy-rarity-forecast-01).
 
 For each of the game's 55 PS5 trophies, forecasts five quantiles of its
 Exophase earn rate (percent) at the case target.
 
-v4 changes over v3 (shipped, live loss 0.163 / coverage 0.436):
-  * ADAPTIVE DILUTION RELIEF. The final's horizon is 4.5 days, and the
-    players count is in its explosive launch phase: it grew 638 -> 3868
-    in 4.7h and past 80,000 by 33h (forced: the platinum sat at 0.63% =
-    4 earners at launch and 0.00% now, and earners never decrease, so
-    P > 4 / 0.00005 = 80,000). Launch-week sales are front-loaded, so
-    that growth MUST saturate: the players logt-slope at the horizon is
-    far below its historical value (on the reality-calibrated suite the
-    true horizon slope is 0.32-0.73 vs a historical 1.4-2.3). A constant
-    logit trend therefore under-forecasts every rate at the target by
-    ~1 logit unit. v4 adds the relief back: med_logit += 4.0 * decel *
-    extrap, where decel = max(0, global players slope - recent-5-states
-    players slope). The deceleration is ~0.28 on saturating players and
-    ~0.00 on power-law players, so the relief self-regulates: it fires
-    on the real (saturating) final and stays silent on the
-    power-law synthetic suite. On the reality suite this alone cuts
-    mean pinball 0.6594 -> 0.5103; on the official suite it costs
-    nothing (0.1683 -> 0.1677).
-  * LOCAL-SLOPE BLEND 0.25 -> 0.15. The last-two-states slope is noisy
-    on real (jumpy) refreshes; less weight on it wins on the reality
-    suite (0.5103 -> 0.4972) and costs ~0.001 on the official suite.
-  * JUMP SCALE 0.5 -> 1.25. The detrended refresh-jump spread was
-    under-weighted for a 4.5-day horizon (the real final's refreshes
-    jump hard: coverage was 0.745). Stronger jump insurance wins on
-    the reality suite and costs ~0.002 on the official suite.
-  * SIGMA SCALE 0.8. Pinball prefers intervals slightly narrower than
-    the calibrated Normal width; a global 0.8x on the final sigma wins
-    on all four suites.
-  * KEPT FROM v3: anchored median, detrended refresh-jump spread,
+v5 changes over v4 (ladder winners; reality suites are the target --
+the dev board top embeds the exact dev answers, see below):
+  * RECENT-WINDOW SLOPE BLEND 0.8 (last 6 states). The v4 diagnostics
+    showed the model still UNDER-forecast rising bronze trophies by
+    ~0.18 logit: slow trophies accelerate late because their Weibull
+    CDF is convex in log time, so the recent slope exceeds the global
+    fit. Blending 80% of the last-6-states Theil-Sen slope into the
+    global slope fixes the rising-trophy bias (suiteR bias +0.101 ->
+    -0.069, holdoutR +0.144 -> -0.015) and is the single biggest v5
+    win. Window 6 beats 5 and 8; weight 0.8 beats 0.7 on reality.
+  * ADAPTIVE SLOPE DECAY (players saturation flattens slopes):
+    slope /= (1 + 3.5 * decel * extrap), applied in the main path and
+    the fallback path. The fixed-decay experiment showed the decay
+    alone cuts reality loss ~12% (suite14 pays heavily, but the final
+    is reality, not power-law); the adaptive version keeps the win
+    while staying ~1 on power-law data. Decel uses the same window-5
+    signal as the relief.
+  * PER-TROPHY DECAY 1.0 (window 10): the trophy's own logit curve
+    flattens as it nears its ultimate fraction; slope /= (1 + 1.0 *
+    max(0, global slope - recent-10 slope) * extrap). Window 10 is
+    essential -- window 5 is too noisy and destroys the official
+    suite (0.2103). Wins on all four reality suites, costs ~0.002
+    on the official suite.
+  * LOCAL-SLOPE BLEND 0.15 -> 0.10, JUMP SCALE 1.25 -> 1.5,
+    RELIEF_DECEL 4.0 -> 4.5, SIGMA SCALE 0.8 -> 0.5, EXTRAP_SCALE
+    0.25 -> 0.0. Each retuned against the decay + recent-blend
+    median; sigma 0.5 sits at the oracle optimum (oracle global
+    multiplier now 1.0x, was 0.75x under v4).
+  * KEPT FROM v4: anchored median, detrended refresh-jump spread,
+    dilution relief (med_logit += RELIEF_DECEL * decel * extrap),
     pure-dilution flat-history prior (exact integer earners over the
     documented 638 -> 3868 refresh, median = the printed 2-decimal
     rate, sigma 0.05), half-median-gap refresh shift of the effective
     target, players forecast by shrunk Theil-Sen on log players,
     sigma floor 0.15 / cap 1.80.
   * REJECTED on the ladder (all worse): slope decay with extrapolation
-    (the trend does NOT flatten -- earners keep accumulating), E/P
-    median blend, asymmetric lower/upper sigmas, horizon jump term,
-    direct horizon-extrap spread term, players-model disagreement
-    spread (the quadratic log-players fit is not concave in the
-    explosive phase), growth caps, per-class/global slope shrink.
+    (v3-era fixed decay -- the ADAPTIVE version is what ships),
+    concave-quadratic logit extrapolation (never fires: quad fits are
+    convex on reality), saturating-players relief (no-op: the quad
+    log-players fit is never concave in the explosive phase),
+    per-trophy jump in the spread, E/P median blend, asymmetric
+    lower/upper sigmas, horizon jump term, direct horizon-extrap
+    spread term, players-model disagreement spread, growth caps,
+    per-class/global slope shrink.
 
 Scores (mean pinball, lower is better):
-  official suite14:   v2 0.1789, v3 0.1683, v4 0.1649
-  official holdout14: v2 0.1692, v3 0.1569, v4 0.1560
-  reality suiteR:     v2 0.9020, v3 0.6594, v4 0.4892  (-26% vs v3)
-  reality holdoutR:   v2 0.9145, v3 0.6692, v4 0.4861  (-27% vs v3)
+  official suite14:   v2 0.1789, v3 0.1683, v4 0.1649, v5 0.1612
+  official holdout14: v2 0.1692, v3 0.1569, v4 0.1560, v5 0.1508
+  reality suiteR:     v2 0.9020, v3 0.6594, v4 0.4892, v5 0.3703  (-24% vs v4)
+  reality holdoutR:   v2 0.9145, v3 0.6692, v4 0.4861, v5 0.3475  (-29% vs v4)
+  reality validation: v4 0.5056 / 0.4820, v5 0.3690 / 0.3684
+    (fresh seeds 301-314 / 401-414, same generator -- confirms the win
+    is not overfit to the 28 tuning scenarios)
 The reality suites (work/gen_reality.py) are calibrated to the real
 launch data: saturating players (638 -> 3868 -> >80k at 33h), per-trophy
 Weibull medians pinned so the simulated rate at 33h equals the real
 Exophase rate fetched 2026-11-20 09:09Z, ultimate earn fractions per
 trophy class, checkpoint 60h, horizon 108h. The flat-history path is
-byte-identical to v3, so the dev-board loss is unchanged (~0.163).
+byte-identical to v3/v4, so the dev-board loss is unchanged (~0.163).
 
 The dev board top (loss 0.000222, typical_miss_pp 0) is uncatchable by
 any legitimate method: a loss of 0.0002 with miss exactly 0 means all
@@ -64,7 +71,7 @@ a statistical model cannot do that (even a perfect median with an
 honest sigma of 0.05 scores 0.0098). Those entries embed the exact dev
 answers as a lookup. The dev board pays nothing (RULES.txt line 42:
 "The practice pays nothing"); the final (26 Nov, real launch data) is
-what pays, and v4 is built for that.
+what pays, and v5 is built for that.
 
 Python 3.13, standard library only. Deterministic, no network.
 The Theil-Sen fits are capped at 40 states (evenly spaced, first and
@@ -91,16 +98,21 @@ Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 LAUNCH_PLAYERS_BEFORE = 638
 LAUNCH_PLAYERS_AFTER = 3868
 
-# v4 constants (ladder winners; see docstring).
-LOCAL_BLEND = 0.15      # weight of the last-two-states slope (v3: 0.25)
-JUMP_SCALE = 1.25       # weight of the detrended refresh-jump spread (v3: 0.5)
-RELIEF_DECEL = 4.0      # adaptive dilution-relief multiplier on players decel
-SIGMA_SCALE = 0.8       # global multiplier on the final sigma
+# v5 constants (ladder winners; see docstring).
+LOCAL_BLEND = 0.10      # weight of the last-two-states slope (v4: 0.15)
+JUMP_SCALE = 1.5        # weight of the detrended refresh-jump spread (v4: 1.25)
+RELIEF_DECEL = 4.5      # adaptive dilution-relief multiplier on players decel (v4: 4.0)
+SIGMA_SCALE = 0.5       # global multiplier on the final sigma (v4: 0.8)
+DECAY_DECEL = 3.5       # adaptive slope decay: slope /= (1 + k*decel*extrap)
+DECAY_TROPHY = 1.0      # per-trophy slope decay from the trophy's own flattening
+TROPHY_WIN = 10         # window (states) for the trophy's recent slope
+RECENT_BLEND = 0.8      # weight of the recent-window (last 6 states) slope
+RECENT_WIN = 6          # window (states) for the recent slope
 FLAT_SIGMA = 0.05       # flat-history spread (deterministic refresh)
 FLAT_ZERO_SIGMA = 1.5   # flat history, zero earners
 SIGMA_FLOOR = 0.15
 SIGMA_CAP = 1.80
-EXTRAP_SCALE = 0.25     # residual growth with extrapolation distance
+EXTRAP_SCALE = 0.0      # residual growth with extrapolation distance (v4: 0.25)
 SHRINK_K_PLAYERS = 3.0
 SHRINK_K_LOGIT = 1.0
 
@@ -316,6 +328,13 @@ def forecast_case(case):
         p_recent_raw = p_slope_raw
     p_decel = max(0.0, p_slope_raw - p_recent_raw)
 
+    # ADAPTIVE SLOPE DECAY: when players growth is saturating, the trophy
+    # logit slopes flatten too (the earners/players ratio stops rising as
+    # fast). Scale every extrapolated slope down by a factor that grows
+    # with the measured players deceleration and the extrapolation
+    # distance. Fires only on saturating data; ~1 on power-law data.
+    decay = 1.0 / (1.0 + DECAY_DECEL * p_decel * extrap)
+
     # Per-trophy logit fits.
     logit_fits = []
     for i in range(n_troph):
@@ -356,8 +375,8 @@ def forecast_case(case):
 
     def spread(sig_e, sig_p, slope_mag):
         """Quadrature spread: fit residuals + refresh staleness +
-        detrended jump shock + a small base term, scaled 0.8x (pinball
-        prefers intervals slightly narrower than the calibrated width)."""
+        detrended jump shock + a small base term, scaled 0.5x (pinball
+        prefers intervals narrower than the calibrated width)."""
         stale = abs(slope_mag) * logt_gap
         sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
                           + stale * stale + 0.10 ** 2
@@ -373,15 +392,33 @@ def forecast_case(case):
         _, rx, ry, s_raw, a_raw = logit_fits[i]
         if s_raw is not None:
             m = len(rx)
-            # Local-slope blend: 15% last-two-states slope.
+            # Local-slope blend: 10% last-two-states slope.
             slope_raw = s_raw
             if len(rx) >= 2:
                 dx = rx[-1] - rx[-2]
                 if dx > 0.0:
                     s_local = (ry[-1] - ry[-2]) / dx
                     slope_raw = (1.0 - LOCAL_BLEND) * s_raw + LOCAL_BLEND * s_local
+            if len(rx) >= 4:
+                # RECENT-WINDOW SLOPE: slow trophies accelerate late
+                # (their Weibull CDF is convex in log time), so the
+                # recent slope exceeds the global fit. Blend it in
+                # heavily; the last-6-states Theil-Sen is the signal.
+                _rw = max(2, min(RECENT_WIN, len(rx)))
+                _s_rec, _ = theil_sen(rx[-_rw:], ry[-_rw:])
+                slope_raw = (1.0 - RECENT_BLEND) * slope_raw + RECENT_BLEND * _s_rec
             # Shrink toward zero (no class/global target survived).
             slope = slope_raw * (m / (m + SHRINK_K_LOGIT))
+            # Adaptive slope decay (players saturation flattens slopes).
+            slope = slope * decay
+            if len(rx) >= 5:
+                # PER-TROPHY DECAY: the trophy's own logit curve flattens
+                # as it nears its ultimate fraction; recent-10 slope
+                # below the global fit decays the slope further.
+                _tw = max(2, min(TROPHY_WIN, len(rx)))
+                _s_rec, _ = theil_sen(rx[-_tw:], ry[-_tw:])
+                _t_dec = max(0.0, s_raw - _s_rec)
+                slope = slope / (1.0 + DECAY_TROPHY * _t_dec * extrap)
             # ANCHORED median: extrapolate from the last observed logit,
             # not from the fit intercept.
             med_logit = ry[-1] + slope * (lt_eff - rx[-1])
@@ -417,12 +454,12 @@ def forecast_case(case):
         else:
             last_logit = logit(rate) if 0.0 < rate < 100.0 else logit(1.0)
             last_x = lt_last
-        med_logit = last_logit + global_slope * (lt_eff - last_x)
+        med_logit = last_logit + global_slope * decay * (lt_eff - last_x)
         med_logit = med_logit + RELIEF_DECEL * p_decel * extrap
         med = clamp_pct(logistic(med_logit))
         sig_e = global_resid * scale
         sig_p = p_resid * scale
-        sigma = spread(sig_e, sig_p, global_slope)
+        sigma = spread(sig_e, sig_p, global_slope * decay)
         qs = [round4(logistic(logit(med) + z * sigma)) for z in zvals]
         rows.append({"id": trophy["id"], "q": qs})
 
