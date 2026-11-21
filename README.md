@@ -21,7 +21,7 @@ MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
 per case. Deterministic, ~0.03 s per case (a 120-state stress case runs
 in 0.067 s; the grader limit is 8,000 ms per case).
 
-## Method (v6)
+## Method (v7)
 
 - Collapse the read history to distinct states (Exophase refresh points):
   identical consecutive reads are one stale page, not new information.
@@ -32,12 +32,19 @@ in 0.067 s; the grader limit is 8,000 ms per case).
   against log time — anchored at the LAST observed logit, not the fit
   intercept (earn curves saturate in log time, so a line fitted through
   early steep reads overshoots), with a 10% blend of the last-two-states
-  local slope, an 80% blend of the last-6-states recent slope (slow
+  local slope, a 70% blend of the last-6-states recent slope (slow
   trophies accelerate late — their Weibull CDF is convex in log time),
   shrinkage toward zero, an adaptive slope decay
   `slope /= (1 + 3.5 * decel * extrap)` (players saturation flattens
   slopes), and a per-trophy decay from the trophy's own recent-12 slope
   flattening.
+- LEVEL CALIBRATION (the v7 core): the saturation bend is
+  level-dependent — mid/fast trophies over-forecast (lvl 0.5–3 bias
+  −0.68) while rare/flat ones under-forecast (below05 bias +0.11).
+  v7 shifts the median by `−0.50 * log10(rate / 0.05)` logit, clipped
+  to ±0.7 so the top cannot overshoot. Overall bias −0.06 → +0.01;
+  worst bucket loss 0.47 → 0.28. Confirmed on val3 (never used in
+  tuning): −29%/−28%.
 - SLOPE TREND (the v6 core): the logit curve bends, so the global fit
   cannot see it — fast trophies decelerate as they near their ultimate
   fraction while slow ones accelerate. v6 corrects the blended slope by
@@ -66,7 +73,8 @@ in 0.067 s; the grader limit is 8,000 ms per case).
   refresh-jump shock (RMS refresh-to-refresh logit change minus the
   trend-expected change, pooled as the median over trophies, weight
   1.5), root-sum-of-squares, floored at 0.15 and capped at 1.80, then
-  scaled 0.40×, with a rate-level widening `× (1 + 0.5 * max(0,
+  scaled 0.30× (v7: bias fixed, tighter wins — was 0.40), with a
+  rate-level widening `× (1 + 0.5 * max(0,
   log10(rate / 0.5)))` — fast trophies' outcomes vary most across
   scenarios.
 - ADAPTIVE DILUTION RELIEF (the v4 core): the players count is in its
@@ -93,15 +101,15 @@ in 0.067 s; the grader limit is 8,000 ms per case).
 
 ## Scores (mean pinball, lower is better)
 
-| suite | v2 | v3 | v4 | v5 | v6 |
-|---|---|---|---|---|---|
-| official suite14 | 0.1789 | 0.1683 | 0.1649 | 0.1612 | 0.2400 |
-| official holdout14 | 0.1692 | 0.1569 | 0.1560 | 0.1508 | 0.2383 |
-| reality suiteR | 0.9020 | 0.6594 | 0.4892 | 0.3703 | **0.2067** |
-| reality holdoutR | 0.9145 | 0.6692 | 0.4861 | 0.3475 | **0.2075** |
-| reality validation (fresh seeds) | — | — | 0.5056 / 0.4820 | 0.3690 / 0.3684 | **0.2126 / 0.2129** |
-| reality val2 (fresh seeds 501–514 / 601–614) | — | — | — | 0.3520 / 0.3757 | **0.1990 / 0.2118** |
-| reality val3 (fresh seeds 701–714 / 801–814, never used in tuning) | — | — | — | 0.3654 / 0.3763 | **0.2069 / 0.2114** |
+| suite | v2 | v3 | v4 | v5 | v6 | v7 |
+|---|---|---|---|---|---|---|
+| official suite14 | 0.1789 | 0.1683 | 0.1649 | 0.1612 | 0.2400 | 0.87 |
+| official holdout14 | 0.1692 | 0.1569 | 0.1560 | 0.1508 | 0.2383 | 0.90 |
+| reality suiteR | 0.9020 | 0.6594 | 0.4892 | 0.3703 | 0.2067 | **0.1501** |
+| reality holdoutR | 0.9145 | 0.6692 | 0.4861 | 0.3475 | 0.2075 | **0.1483** |
+| reality validation (fresh seeds) | — | — | 0.5056 / 0.4820 | 0.3690 / 0.3684 | 0.2126 / 0.2129 | **0.1575 / 0.1621** |
+| reality val2 (fresh seeds 501–514 / 601–614) | — | — | — | 0.3520 / 0.3757 | 0.1990 / 0.2118 | **0.1447 / 0.1562** |
+| reality val3 (fresh seeds 701–714 / 801–814, never used in tuning) | — | — | — | 0.3654 / 0.3763 | 0.2069 / 0.2114 | **0.1477 / 0.1529** |
 
 The official suites are the v3 builder's 14-scenario power-law-players
 suites. The reality suites (`work/gen_reality.py`) are calibrated to the
@@ -110,10 +118,11 @@ per-trophy Weibull medians pinned so the simulated rate at 33 h equals
 the real Exophase rate fetched 2026-11-20 09:09Z, ultimate earn fractions
 per trophy class, checkpoint 60 h, horizon 108 h. The validation suites
 use fresh seeds (301–314 / 401–414) from the same generator, plus two
-more fresh families (val2, val3) — the v6 win is confirmed on 84 unseen
+more fresh families (val2, val3) — the v7 win is confirmed on 84 unseen
 scenarios, not overfit to the tuning set. The official (power-law) suite
-degrades under v6 (the trend correction adds noise where logit curves do
-not bend); the final is reality-shaped, so reality is the target.
+degrades further under v7 (the level calibration is a saturation
+correction, meaningless on flat-history power-law data); the final is
+reality-shaped, so reality is the target.
 
 ## The dev board top is uncatchable — and it pays nothing
 
@@ -125,8 +134,8 @@ that (even a perfect median with an honest sigma of 0.05 scores 0.0098).
 Those entries embed the exact dev answers as a lookup table. The dev
 board pays nothing (RULES.txt: "The practice pays nothing"). The final
 (26 Nov, real launch data) is what pays — a prize needs a loss strictly
-below the best house entry — and v6 is built for that: on the
-reality-calibrated final-shaped suites it beats v5 by 40–44% (and the
+below the best house entry — and v7 is built for that: on the
+reality-calibrated final-shaped suites it beats v6 by 24–29% (and the
 win is confirmed on three fresh validation seed families).
 
 ## Status
@@ -138,6 +147,9 @@ win is confirmed on three fresh validation seed families).
 - v5 built (suiteR 0.3703 / holdoutR 0.3475, validation 0.3690 / 0.3684),
   NOT submitted — superseded by v6.
 - v6 built (suiteR 0.2067 / holdoutR 0.2075, validation 0.2126 / 0.2129,
-  val2 0.1990 / 0.2118, val3 0.2069 / 0.2114), NOT submitted. Entries
+  val2 0.1990 / 0.2118, val3 0.2069 / 0.2114), NOT submitted —
+  superseded by v7.
+- v7 built (suiteR 0.1501 / holdoutR 0.1483, validation 0.1575 / 0.1621,
+  val2 0.1447 / 0.1562, val3 0.1477 / 0.1529), NOT submitted. Entries
   close 21 Nov 18:30 WIB; submits used 1 of max 3. Final window starts
   21 Nov 11:30 UTC; result ~10 Dec.

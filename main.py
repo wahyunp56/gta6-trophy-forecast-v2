@@ -1,7 +1,29 @@
-"""GTA VI trophy rarity forecaster v6 (gta6-trophy-rarity-forecast-01).
+"""GTA VI trophy rarity forecaster v7 (gta6-trophy-rarity-forecast-01).
 
 For each of the game's 55 PS5 trophies, forecasts five quantiles of its
 Exophase earn rate (percent) at the case target.
+
+v7 changes over v6 (ladder winners; reality suites are the target --
+the dev board top embeds the exact dev answers, see below):
+  * LEVEL CALIBRATION 0.50, CAPPED AT 0.7: the v6 diagnostics left
+    mid/fast trophies over-forecast (lvl 0.5-3 loss 0.47, bias -0.68;
+    lvl 3+ bias -0.55) while rare/flat ones under-forecast (below05
+    bias +0.11, flat +0.14): the logit curve's saturation bend is
+    level-dependent, and the slope trend alone cannot see it. Shift the
+    median by -0.50*log10(rate/0.05) logit, clipped to +/-0.7 so the
+    top cannot overshoot (the 3+ bucket flips positive uncapped).
+    Single biggest v7 win; overall bias -0.06 -> +0.01, worst bucket
+    loss 0.47 -> 0.28, and the win holds on every fresh-seed suite
+    incl. val3 (never used in tuning): -29%/-28%.
+  * SIGMA SCALE 0.40 -> 0.30: with the bias fixed, the intervals were
+    too wide; tightening the global multiplier cuts reality loss
+    another ~4%. Peak is flat at 0.28-0.30.
+  * RECENT BLEND 0.8 -> 0.70: small uniform win under the shift.
+  * REJECTED on the ladder: level-scaled trend (worse everywhere),
+    second-order trend (worse), trend on the recent window only
+    (mixed), flat-slope clamp (no-op), band sigma for 0.5-3 / 3+
+    (no gain), asymmetric sigmas (worse), trend 0.7/1.1, relief-slope
+    0.4/0.6, jump 1.25/1.75, decay-decel 3.0/4.0, relief-decel 4.0/5.0.
 
 v6 changes over v5 (ladder winners; reality suites are the target --
 the dev board top embeds the exact dev answers, see below):
@@ -90,21 +112,25 @@ the dev board top embeds the exact dev answers, see below):
     per-class/global slope shrink.
 
 Scores (mean pinball, lower is better):
-  official suite14:   v2 0.1789, v3 0.1683, v4 0.1649, v5 0.1612, v6 0.2400
-  official holdout14: v2 0.1692, v3 0.1569, v4 0.1560, v5 0.1508, v6 0.2383
-  reality suiteR:     v2 0.9020, v3 0.6594, v4 0.4892, v5 0.3703, v6 0.2067  (-44% vs v5)
-  reality holdoutR:   v2 0.9145, v3 0.6692, v4 0.4861, v5 0.3475, v6 0.2075  (-40% vs v5)
-  reality validation: v4 0.5056 / 0.4820, v5 0.3690 / 0.3684, v6 0.2126 / 0.2129
+  official suite14:   v2 0.1789, v3 0.1683, v4 0.1649, v5 0.1612, v6 0.2400, v7 0.87
+  official holdout14: v2 0.1692, v3 0.1569, v4 0.1560, v5 0.1508, v6 0.2383, v7 0.90
+  reality suiteR:     v2 0.9020, v3 0.6594, v4 0.4892, v5 0.3703, v6 0.2067, v7 0.1501  (-27% vs v6)
+  reality holdoutR:   v2 0.9145, v3 0.6692, v4 0.4861, v5 0.3475, v6 0.2075, v7 0.1483  (-29% vs v6)
+  reality validation: v4 0.5056 / 0.4820, v5 0.3690 / 0.3684, v6 0.2126 / 0.2129, v7 0.1575 / 0.1621
     (fresh seeds 301-314 / 401-414, same generator -- confirms the win
     is not overfit to the 28 tuning scenarios)
-  reality val2 (fresh seeds 501-514 / 601-614): v5 0.3520 / 0.3757, v6 0.1990 / 0.2118
-  reality val3 (fresh seeds 701-714 / 801-814, never used in tuning): v5 0.3654 / 0.3763, v6 0.2069 / 0.2114
-    The official (power-law) suite degrades under v6: the trend correction
-    adds noise where logit curves do not bend. The final is reality-shaped
+  reality val2 (fresh seeds 501-514 / 601-614): v5 0.3520 / 0.3757, v6 0.1990 / 0.2118, v7 0.1447 / 0.1562
+  reality val3 (fresh seeds 701-714 / 801-814, never used in tuning): v5 0.3654 / 0.3763, v6 0.2069 / 0.2114, v7 0.1477 / 0.1529
+    The official (power-law) suite degrades further under v7: the level
+    calibration is a saturation correction and is meaningless on
+    flat-history power-law data. The final is reality-shaped
     (real launch data, saturating players), so reality is the target; the
-    trend win is uniform across all 14 reality scenarios incl. shape 1.2/2.0.
-  v6 diagnostics (reality): last0/platinum loss 0.236 -> 0.050, bias -0.29 -> 0.00;
-    lvl 3+ bias -0.49 -> -0.13; below05 loss 0.316 -> 0.168; miss 1.89pp -> 1.17pp.
+    v7 win is uniform across all reality suites incl. val3, which was
+    never used in selection.
+  v7 diagnostics (reality): overall bias -0.06 -> +0.01; lvl 0.5-3 loss
+    0.47 -> 0.28, bias -0.68 -> -0.12; lvl 3+ loss 0.35 -> 0.19;
+    below05 loss 0.17 -> 0.14, bias +0.11 -> 0.00; flat loss 0.18 ->
+    0.14; rising loss 0.22 -> 0.17, bias -0.20 -> 0.00.
 The reality suites (work/gen_reality.py) are calibrated to the real
 launch data: saturating players (638 -> 3868 -> >80k at 33h), per-trophy
 Weibull medians pinned so the simulated rate at 33h equals the real
@@ -151,15 +177,17 @@ LAUNCH_PLAYERS_AFTER = 3868
 LOCAL_BLEND = 0.10      # weight of the last-two-states slope (v4: 0.15)
 JUMP_SCALE = 1.5        # weight of the detrended refresh-jump spread (v4: 1.25)
 RELIEF_DECEL = 4.5      # adaptive dilution-relief multiplier on players decel (v4: 4.0)
-SIGMA_SCALE = 0.40      # global multiplier on the final sigma (v5: 0.5)
+SIGMA_SCALE = 0.30      # global multiplier on the final sigma (v6: 0.40; v7: bias fixed, tighter wins)
 DECAY_DECEL = 3.5       # adaptive slope decay: slope /= (1 + k*decel*extrap)
 DECAY_TROPHY = 1.0      # per-trophy slope decay from the trophy's own flattening
 TROPHY_WIN = 12         # window (states) for the trophy's recent slope (v5: 10)
-RECENT_BLEND = 0.8      # weight of the recent-window (last 6 states) slope
+RECENT_BLEND = 0.70     # weight of the recent-window (last 6 states) slope (v6: 0.8)
 RECENT_WIN = 6          # window (states) for the recent slope
 TREND_BLEND = 0.90      # v6: weight of the half-to-half slope-trend correction
 RELIEF_SLOPE = 0.50     # v6: relief scaled down for fast trophies (slope-scaled)
 SIG_LVL = 0.50          # v6: sigma widening for high-rate trophies (level-scaled)
+LVL_SHIFT = 0.50        # v7: level calibration slope, med_logit += -LVL_SHIFT*log10(rate/0.05)
+LVL_CAP = 0.70          # v7: clip the level shift to +/-LVL_CAP logit
 FLAT_SIGMA = 0.05       # flat-history spread (deterministic refresh)
 FLAT_ZERO_SIGMA = 1.5   # flat history, zero earners
 SIGMA_FLOOR = 0.15
@@ -500,6 +528,14 @@ def forecast_case(case):
             _rw = max(0.0, 1.0 - RELIEF_SLOPE * max(0.0, slope))
             med_logit = med_logit + RELIEF_DECEL * p_decel * extrap * _rw
             med = clamp_pct(logistic(med_logit))
+            # LEVEL CALIBRATION (v7): the saturation bend is level-dependent
+            # — mid/fast trophies over-forecast, rare ones under-forecast.
+            # Shift the median down for fast trophies and up for rare ones,
+            # capped so the top cannot overshoot. (last0 trophies below are
+            # overwritten by the pure-dilution median, so they are unaffected.)
+            _sh = -LVL_SHIFT * math.log10(max(rate, 0.005) / 0.05)
+            _sh = max(-LVL_CAP, min(LVL_CAP, _sh))
+            med = clamp_pct(logistic(logit(med) + _sh))
             if rate == 0.0:
                 # Last printed rate is 0.00 (platinum pattern): the anchored
                 # extrapolation starts from a stale nonzero logit. Earners are
