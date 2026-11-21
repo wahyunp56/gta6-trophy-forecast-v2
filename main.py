@@ -1,9 +1,50 @@
-"""GTA VI trophy rarity forecaster v5 (gta6-trophy-rarity-forecast-01).
+"""GTA VI trophy rarity forecaster v6 (gta6-trophy-rarity-forecast-01).
 
 For each of the game's 55 PS5 trophies, forecasts five quantiles of its
 Exophase earn rate (percent) at the case target.
 
-v5 changes over v4 (ladder winners; reality suites are the target --
+v6 changes over v5 (ladder winners; reality suites are the target --
+the dev board top embeds the exact dev answers, see below):
+  * SLOPE TREND 0.9 (half-to-half Theil-Sen slope change). The v5
+    diagnostics showed fast/mid trophies over-forecast by ~0.5-0.9 logit
+    while rare/flat ones under-forecast: the logit curve bends, and the
+    global fit cannot see it. The trend correction lowers the slope for
+    decelerating (saturating) trophies and raises it for accelerating
+    ones. Single biggest v6 win; wins on ALL 14 reality scenarios
+    (incl. Weibull shape 1.2 and 2.0, frequent refresh, fast growth).
+    Capping the correction kills it (cap 1.0 -> +0.016, cap 0.5 -> +0.041):
+    the large corrections are signal, not noise.
+  * LAST-RATE-0 DILUTION: trophies whose last printed rate is 0.00
+    (platinum pattern: 4 launch earners, rate crushed to 0.00% by
+    dilution) get a pure-dilution median from their last nonzero
+    earners over the forecast players. The anchored extrapolation used
+    to start from a stale nonzero logit and over-forecast them by
+    ~0.29 logit. -0.026/-0.018 on reality, official suite untouched.
+  * RELIEF SCALED BY TROPHY SLOPE 0.5: the dilution relief
+    (+4.5*decel*extrap) double-counts for fast trophies whose recent
+    slope already prices the easing dilution, and under-serves flat
+    ones. relief_w = max(0, 1 - 0.5*max(0, slope)).
+  * SIGMA FROM RECENT-WINDOW RESIDUALS: sig_e uses the last-6-states
+    residual RMS instead of the whole-history RMS; the current refresh
+    noise matters more, especially for rare trophies whose 2-decimal
+    rounding jumps. Small but consistent win on top of the others.
+  * NEAR-100 PIN: a trophy whose last printed rate is >= 99.0% ("Just
+    Like Paradise": everyone earns it within ~1h of starting) gets all
+    five quantiles pinned to 100.0. The logit path asymptotes below 100
+    and pays ~1.5 pinball per point against an answer of 100.0 — this
+    one trophy was 11% of all v5 reality loss. Also insures the real
+    final, where a player influx could print the rate 99.99%.
+  * SIGMA BY RATE LEVEL 0.5: sigma *= 1 + 0.5*max(0, log10(r/0.5)).
+    Fast trophies' outcomes vary most across scenarios (their ultimate
+    fractions span 2x); widening their intervals cuts pinball. Also
+    improves the official suite (0.248 -> 0.240).
+  * SIGMA SCALE 0.5 -> 0.40, PER-TROPHY DECAY WINDOW 10 -> 12.
+    (LOCAL blend and per-trophy decay are now inert — the trend handles
+    the curvature — but are kept: removing them changes nothing.)
+  * REJECTED on the ladder: E/P log-earner blend for rare trophies
+    (worse everywhere, +0.015/+0.021), level-dependent slope shrink
+    (reality -0.004 but official suite explodes to 0.22 — not worth it),
+    trend cap, sigma 0.40 (tied), recent blend 0.85/0.9 (tied/worse).
 the dev board top embeds the exact dev answers, see below):
   * RECENT-WINDOW SLOPE BLEND 0.8 (last 6 states). The v4 diagnostics
     showed the model still UNDER-forecast rising bronze trophies by
@@ -49,13 +90,21 @@ the dev board top embeds the exact dev answers, see below):
     per-class/global slope shrink.
 
 Scores (mean pinball, lower is better):
-  official suite14:   v2 0.1789, v3 0.1683, v4 0.1649, v5 0.1612
-  official holdout14: v2 0.1692, v3 0.1569, v4 0.1560, v5 0.1508
-  reality suiteR:     v2 0.9020, v3 0.6594, v4 0.4892, v5 0.3703  (-24% vs v4)
-  reality holdoutR:   v2 0.9145, v3 0.6692, v4 0.4861, v5 0.3475  (-29% vs v4)
-  reality validation: v4 0.5056 / 0.4820, v5 0.3690 / 0.3684
+  official suite14:   v2 0.1789, v3 0.1683, v4 0.1649, v5 0.1612, v6 0.2400
+  official holdout14: v2 0.1692, v3 0.1569, v4 0.1560, v5 0.1508, v6 0.2383
+  reality suiteR:     v2 0.9020, v3 0.6594, v4 0.4892, v5 0.3703, v6 0.2067  (-44% vs v5)
+  reality holdoutR:   v2 0.9145, v3 0.6692, v4 0.4861, v5 0.3475, v6 0.2075  (-40% vs v5)
+  reality validation: v4 0.5056 / 0.4820, v5 0.3690 / 0.3684, v6 0.2126 / 0.2129
     (fresh seeds 301-314 / 401-414, same generator -- confirms the win
     is not overfit to the 28 tuning scenarios)
+  reality val2 (fresh seeds 501-514 / 601-614): v5 0.3520 / 0.3757, v6 0.1990 / 0.2118
+  reality val3 (fresh seeds 701-714 / 801-814, never used in tuning): v5 0.3654 / 0.3763, v6 0.2069 / 0.2114
+    The official (power-law) suite degrades under v6: the trend correction
+    adds noise where logit curves do not bend. The final is reality-shaped
+    (real launch data, saturating players), so reality is the target; the
+    trend win is uniform across all 14 reality scenarios incl. shape 1.2/2.0.
+  v6 diagnostics (reality): last0/platinum loss 0.236 -> 0.050, bias -0.29 -> 0.00;
+    lvl 3+ bias -0.49 -> -0.13; below05 loss 0.316 -> 0.168; miss 1.89pp -> 1.17pp.
 The reality suites (work/gen_reality.py) are calibrated to the real
 launch data: saturating players (638 -> 3868 -> >80k at 33h), per-trophy
 Weibull medians pinned so the simulated rate at 33h equals the real
@@ -98,16 +147,19 @@ Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 LAUNCH_PLAYERS_BEFORE = 638
 LAUNCH_PLAYERS_AFTER = 3868
 
-# v5 constants (ladder winners; see docstring).
+# v6 constants (ladder winners; see docstring).
 LOCAL_BLEND = 0.10      # weight of the last-two-states slope (v4: 0.15)
 JUMP_SCALE = 1.5        # weight of the detrended refresh-jump spread (v4: 1.25)
 RELIEF_DECEL = 4.5      # adaptive dilution-relief multiplier on players decel (v4: 4.0)
-SIGMA_SCALE = 0.5       # global multiplier on the final sigma (v4: 0.8)
+SIGMA_SCALE = 0.40      # global multiplier on the final sigma (v5: 0.5)
 DECAY_DECEL = 3.5       # adaptive slope decay: slope /= (1 + k*decel*extrap)
 DECAY_TROPHY = 1.0      # per-trophy slope decay from the trophy's own flattening
-TROPHY_WIN = 10         # window (states) for the trophy's recent slope
+TROPHY_WIN = 12         # window (states) for the trophy's recent slope (v5: 10)
 RECENT_BLEND = 0.8      # weight of the recent-window (last 6 states) slope
 RECENT_WIN = 6          # window (states) for the recent slope
+TREND_BLEND = 0.90      # v6: weight of the half-to-half slope-trend correction
+RELIEF_SLOPE = 0.50     # v6: relief scaled down for fast trophies (slope-scaled)
+SIG_LVL = 0.50          # v6: sigma widening for high-rate trophies (level-scaled)
 FLAT_SIGMA = 0.05       # flat-history spread (deterministic refresh)
 FLAT_ZERO_SIGMA = 1.5   # flat history, zero earners
 SIGMA_FLOOR = 0.15
@@ -373,19 +425,26 @@ def forecast_case(case):
 
     scale = 1.0 + EXTRAP_SCALE * extrap
 
-    def spread(sig_e, sig_p, slope_mag):
+    def spread(sig_e, sig_p, slope_mag, lvl_mult=1.0):
         """Quadrature spread: fit residuals + refresh staleness +
-        detrended jump shock + a small base term, scaled 0.5x (pinball
+        detrended jump shock + a small base term, scaled 0.4x (pinball
         prefers intervals narrower than the calibrated width)."""
         stale = abs(slope_mag) * logt_gap
         sigma = math.sqrt(sig_e * sig_e + sig_p * sig_p
                           + stale * stale + 0.10 ** 2
                           + (JUMP_SCALE * jump_scale) ** 2)
-        return min(SIGMA_CAP, max(SIGMA_FLOOR, sigma * SIGMA_SCALE))
+        return min(SIGMA_CAP, max(SIGMA_FLOOR, sigma * SIGMA_SCALE * lvl_mult))
 
     for i, trophy in enumerate(trophies):
         rate = last_rate[i]
         if rate >= 100.0:
+            rows.append({"id": trophy["id"], "q": [100.0] * len(levels)})
+            continue
+        if rate >= 99.0:
+            # NEAR-100 PIN (v6): everyone earns it; the rate only sits below
+            # 100 because of the last-hour player influx. It can only rise
+            # to 100.0 by the target. The logit path asymptotes below 100
+            # and pays ~1.5 pinball per point against an answer of 100.0.
             rows.append({"id": trophy["id"], "q": [100.0] * len(levels)})
             continue
 
@@ -407,6 +466,15 @@ def forecast_case(case):
                 _rw = max(2, min(RECENT_WIN, len(rx)))
                 _s_rec, _ = theil_sen(rx[-_rw:], ry[-_rw:])
                 slope_raw = (1.0 - RECENT_BLEND) * slope_raw + RECENT_BLEND * _s_rec
+            if len(rx) >= 8:
+                # SLOPE TREND (v6): the logit curve bends — fast trophies
+                # decelerate (late slope < early slope) as they near their
+                # ultimate fraction, slow ones accelerate. Correct the
+                # blended slope by the half-to-half slope change.
+                _h = len(rx) // 2
+                _s_e, _ = theil_sen(rx[:_h], ry[:_h])
+                _s_l, _ = theil_sen(rx[_h:], ry[_h:])
+                slope_raw = slope_raw + TREND_BLEND * (_s_l - _s_e)
             # Shrink toward zero (no class/global target survived).
             slope = slope_raw * (m / (m + SHRINK_K_LOGIT))
             # Adaptive slope decay (players saturation flattens slopes).
@@ -426,12 +494,38 @@ def forecast_case(case):
             # so the dilution drag eases and rates rise faster than the
             # historical net trend implies. The relief is proportional
             # to the measured players deceleration, so it fires only
-            # when the data shows the surge slowing.
-            med_logit = med_logit + RELIEF_DECEL * p_decel * extrap
+            # when the data shows the surge slowing. (v6: scaled by the
+            # trophy's own slope — fast trophies already price the easing
+            # dilution into their recent slope, flat ones need it all.)
+            _rw = max(0.0, 1.0 - RELIEF_SLOPE * max(0.0, slope))
+            med_logit = med_logit + RELIEF_DECEL * p_decel * extrap * _rw
             med = clamp_pct(logistic(med_logit))
-            sig_e = rms_residual(rx, ry, s_raw, a_raw) * scale
+            if rate == 0.0:
+                # Last printed rate is 0.00 (platinum pattern): the anchored
+                # extrapolation starts from a stale nonzero logit. Earners are
+                # (nearly) constant; the rate at the target is pure dilution.
+                _e_last = 0
+                for _k in range(len(states) - 1, -1, -1):
+                    _r = states[_k][2][i]
+                    if _r is not None and _r > 0.0:
+                        _e_last = int(round(_r / 100.0 * states[_k][1]))
+                        break
+                if _e_last > 0:
+                    med = clamp_pct(100.0 * _e_last / players_fc)
+            if len(rx) >= 4:
+                # Spread from recent-window residuals (v6): the current
+                # refresh noise matters more than whole-history scatter,
+                # especially for rare trophies whose 2-decimal rounding jumps.
+                _rw = max(2, min(6, len(rx)))
+                _sr, _ar = theil_sen(rx[-_rw:], ry[-_rw:])
+                sig_e = rms_residual(rx[-_rw:], ry[-_rw:], _sr, _ar) * scale
+            else:
+                sig_e = rms_residual(rx, ry, s_raw, a_raw) * scale
             sig_p = p_resid * scale
-            sigma = spread(sig_e, sig_p, slope)
+            # SIGMA BY RATE LEVEL (v6): fast trophies' outcomes vary most
+            # across scenarios; widen their intervals.
+            _lvl = 1.0 + SIG_LVL * max(0.0, math.log10(max(rate, 0.5) / 0.5))
+            sigma = spread(sig_e, sig_p, slope, _lvl)
             qs = [round4(logistic(logit(med) + z * sigma)) for z in zvals]
             rows.append({"id": trophy["id"], "q": qs})
             continue
@@ -457,6 +551,16 @@ def forecast_case(case):
         med_logit = last_logit + global_slope * decay * (lt_eff - last_x)
         med_logit = med_logit + RELIEF_DECEL * p_decel * extrap
         med = clamp_pct(logistic(med_logit))
+        if rate == 0.0:
+            # Platinum pattern (v6): dilution-only median, as in the main path.
+            _e_last = 0
+            for _k in range(len(states) - 1, -1, -1):
+                _r = states[_k][2][i]
+                if _r is not None and _r > 0.0:
+                    _e_last = int(round(_r / 100.0 * states[_k][1]))
+                    break
+            if _e_last > 0:
+                med = clamp_pct(100.0 * _e_last / players_fc)
         sig_e = global_resid * scale
         sig_p = p_resid * scale
         sigma = spread(sig_e, sig_p, global_slope * decay)
